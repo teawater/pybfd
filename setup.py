@@ -70,6 +70,9 @@ class CustomBuildExtension( build_ext ):
             "includes": [
                 "/usr/include"
             ],
+	    "bfd_includes": [
+                "/usr/include"
+            ],
             "possible-lib-ext": [
                 ".so",
             ]
@@ -83,6 +86,10 @@ class CustomBuildExtension( build_ext ):
                 "/opt/local/include", # macports
                 "/usr/local/include", # homebrew
             ],
+	    "bfd_includes": [
+                "/opt/local/include", # macports
+                "/usr/local/include", # homebrew
+            ],
             "possible-lib-ext": [
                 ".a", # homebrew
                 ".dylib" # macports
@@ -93,6 +100,7 @@ class CustomBuildExtension( build_ext ):
     def __init__(self, *args, **kargs):
         self.libs = None
         self.includes = None
+        self.bfd_includes = None
         self.platform = None
         build_ext.__init__(self, *args, **kargs)
     def initialize_options(self):
@@ -107,8 +115,7 @@ class CustomBuildExtension( build_ext ):
             ('with_static_binutils','with_static_binutils'))
         build_ext.finalize_options(self)
 
-    def check_includes(self, incdir):
-        files = ["bfd.h", "dis-asm.h"]
+    def check_includes(self, incdir, files):
         for filename in files:
             if not os.path.isfile( os.path.join( incdir, filename) ):
                 return False
@@ -175,9 +182,11 @@ class CustomBuildExtension( build_ext ):
 
         if self.with_static_binutils: # use the nm from the binutils distro
 
+	    #print nms
             nms = [
-                os.path.join( libs_dir, "..", "bin", "nm" ), # default name of nm
-                os.path.join( libs_dir, "..", "bin", "gnm" ) # in OSX brew install binutils's nm as gnm.
+                os.path.join( self.with_static_binutils, "bin", "nm" ), # default name of nm
+                os.path.join( self.with_static_binutils, "bin", "gnm" ), # in OSX brew install binutils's nm as gnm.
+                os.path.join( self.with_static_binutils, "binutils", "nm-new" )
             ]
             path_to_nm = None
             for nm_fullpath in nms:
@@ -193,7 +202,7 @@ class CustomBuildExtension( build_ext ):
         #
         # Prepare the libs to be used as option of the compiler.
 
-        path_to_bfd_header = os.path.join( self.includes, "bfd.h")
+        path_to_bfd_header = os.path.join( self.bfd_includes, "bfd.h")
         supported_machines = get_supported_machines(path_to_bfd_header)
 
         supported_archs = get_supported_architectures(
@@ -217,7 +226,7 @@ class CustomBuildExtension( build_ext ):
         c_compiler = new_compiler()
         objects = c_compiler.compile(
             [os.path.join(PACKAGE_DIR, "gen_bfd_archs.c"), ],
-            include_dirs = [self.includes,]
+            include_dirs = [self.includes, self.bfd_includes]
             )
         program = c_compiler.link_executable(
             objects,
@@ -288,20 +297,31 @@ class CustomBuildExtension( build_ext ):
         if self.with_static_binutils: # the user has specified a custom binutils distro.
             print "[+] Using specific binutils static distribution"
             print "[+]   %s" % self.with_static_binutils
-            self.platform["libs"] = [os.path.join( self.with_static_binutils, "lib"),]
+            self.platform["libs"] = [os.path.join( self.with_static_binutils, "lib"), os.path.join( self.with_static_binutils, "opcodes"), os.path.join( self.with_static_binutils, "libiberty"),]
             self.platform["includes"] = [os.path.join( self.with_static_binutils, "include"),]
+            self.platform["bfd_includes"] = [os.path.join( self.with_static_binutils, "include"), os.path.join( self.with_static_binutils, "bfd"),]
             self.platform["possible-lib-ext"] = [".a",] # for all unix platforms.
 
         # check for known includes
         for inc in self.platform["includes"]:
-            if self.check_includes(inc):
+            if self.check_includes(inc, ["dis-asm.h", ]):
                 self.includes = inc # found a valid include dir with bintuils
                 break
         if self.includes == None:
-            raise Exception("unable to determine correct include path for bfd.h / dis-asm.h")
+            raise Exception("unable to determine correct include path for dis-asm.h")
 
         print "[+] Using binutils headers at:"
         print "[+]   %s" % self.includes
+
+        for inc in self.platform["bfd_includes"]:
+            if self.check_includes(inc, ["bfd.h",]):
+                self.bfd_includes = inc # found a valid include dir with bintuils
+                break
+        if self.bfd_includes == None:
+            raise Exception("unable to determine correct include path for bfd.h")
+
+        print "[+] Using bfd headers at:"
+        print "[+]   %s" % self.bfd_includes
 
         # we'll use this include path for building.
         ext_includes = [self.includes, ]
@@ -342,7 +362,7 @@ class CustomBuildExtension( build_ext ):
             ext_libs = [self.prepare_libs_for_cc(os.path.basename(lib)) for lib in self.libs]
 
         # add dependecy to libiberty
-        if self.with_static_binutils or sys.platform == "darwin": # in OSX we always needs a static lib-iverty.
+        if sys.platform == "darwin": # in OSX we always needs a static lib-iverty.
 
             lib_liberty_partialpath = libraries_paths
             if sys.platform == "darwin": # in osx the lib-iberty is prefixe by "machine" ppc/i386/x86_64
@@ -352,6 +372,21 @@ class CustomBuildExtension( build_ext ):
             lib_liberty_fullpath = os.path.join(*lib_liberty_partialpath ) # merge the prefix and the path
             if not os.path.isfile(lib_liberty_fullpath):
                 raise Exception("missing expected library (libiberty) in %s." % "\n".join(libraries_paths))
+            ext_extra_objects.append(lib_liberty_fullpath)
+
+        # add dependecy to libiberty
+        if self.with_static_binutils:
+	    lib_liberty_partialpath = libraries_paths
+            lib_liberty_partialpath.append(os.path.join( self.with_static_binutils, "libiberty"))
+
+	    lib_liberty_fullpath = None
+	    for lib in lib_liberty_partialpath:
+		if os.path.isfile(os.path.join( lib, "libiberty.a")):
+		    lib_liberty_fullpath = os.path.join( lib, "libiberty.a")
+		    break
+
+            if lib_liberty_fullpath == None:
+                raise Exception("missing expected library (libiberty) in %s." % "\n".join(lib_liberty_partialpath))
             ext_extra_objects.append(lib_liberty_fullpath)
 
         # generate .py / .h files that depends of libopcodes / libbfd currently selected
