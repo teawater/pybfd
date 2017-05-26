@@ -15,6 +15,15 @@ _______             _______   ________  _______
 PyBFD
 =====
 
+## Cannot work
+Use python ./setup.py install --with-static-binutils= with binutils that
+config with:
+```
+./configure --target=aarch64-linux --disable-nls --disable-shared --enable-static CFLAGS="-g -O2 -fPIC"
+```
+But got some cannot find symbol after build and install.
+Wish I have time to fix it in the future.
+
 ## What is PyBFD?
 
 **A Python interface to the GNU Binary File Descriptor (BFD) library.**
